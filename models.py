@@ -15,6 +15,11 @@ class TransactionStatus(str, enum.Enum):
 class Category(str, enum.Enum):
     work = "work"
     personal = "personal"
+    
+class IncomeSource(str, enum.Enum):
+    salary = "salary"               # 工资
+    reimbursement = "reimbursement" # 报销款
+    other = "other"                 # 其他
 
 # --- 1. 账单表 (债权) ---
 class Transaction(Base):
@@ -56,7 +61,13 @@ class SalaryLog(Base):
     # 【辅助字段】这笔钱还剩多少没被分配 (方便你下次继续用这笔钱核销)
     amount_unused = Column(Numeric(10, 2), nullable=False)
     
+    
     month = Column(String(20), nullable=False) # 比如 "2023-10"
+    
+    # 新增字段
+    source = Column(Enum(IncomeSource), default=IncomeSource.salary)
+    remark = Column(String(255), nullable=True)
+    
     received_date = Column(DateTime, nullable=False)
     created_at = Column(DateTime, server_default=func.now())
 

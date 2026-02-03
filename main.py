@@ -5,6 +5,8 @@ from sqlalchemy import create_engine, func
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 from models import Transaction, TransactionStatus, SalaryLog, TransactionSettlement
+from typing import List, Optional
+from sqlalchemy import desc
 import schemas
 
 # 数据库配置
@@ -22,6 +24,49 @@ def get_db():
         db.close()
 
 # --- 业务接口 ---
+
+@app.get("/transactions/", response_model=List[schemas.TransactionRead], tags=["1. 记账 (债权)"])
+def read_transactions(
+    skip: int = 0, 
+    limit: int = 100, 
+    unpaid_only: bool = False,  # 新增：是否只看未结清的
+    db: Session = Depends(get_db)
+):
+    """
+    获取账单列表。
+    - unpaid_only=True: 只看 pending 和 partially_settled 的账单 (用于核销)
+    - 默认按 ID 倒序排列 (最新的在最前)
+    """
+    query = db.query(Transaction)
+    
+    if unpaid_only:
+        # 筛选状态不等于 settled 的
+        query = query.filter(Transaction.status != TransactionStatus.settled)
+        
+    # 按 ID 倒序，最新的账单显示在最上面
+    transactions = query.order_by(desc(Transaction.id)).offset(skip).limit(limit).all()
+    return transactions
+
+@app.get("/salary_logs/", response_model=List[schemas.SalaryLogRead], tags=["2. 入账 (资金池)"])
+def read_salary_logs(
+    skip: int = 0, 
+    limit: int = 100,
+    available_only: bool = False, # 新增：是否只看还有余额的
+    db: Session = Depends(get_db)
+):
+    """
+    获取资金池记录。
+    - available_only=True: 只看 amount_unused > 0 的记录 (用于核销时选择资金来源)
+    """
+    query = db.query(SalaryLog)
+    
+    if available_only:
+        # 只筛选还有剩余金额的记录
+        query = query.filter(SalaryLog.amount_unused > 0)
+        
+    # 按 ID 倒序
+    logs = query.order_by(desc(SalaryLog.id)).offset(skip).limit(limit).all()
+    return logs
 
 @app.post("/transactions/", response_model=schemas.TransactionRead, tags=["1. 记账 (债权)"])
 def create_transaction(item: schemas.TransactionCreate, db: Session = Depends(get_db)):

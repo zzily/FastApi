@@ -14,22 +14,10 @@ import time
 from fastapi import Request
 import schemas
 
-import os
 
-# 读取环境变量
-user = os.getenv("DB_USER")
-password = os.getenv("DB_PASSWORD")
-host = os.getenv("DB_HOST")
-port = os.getenv("DB_PORT", "4000") # 默认为 4000
-db_name = os.getenv("DB_NAME", "finance_manager")
-
-encoded_password = urllib.parse.quote_plus(password)
 
 # 数据库配置
-SQLALCHEMY_DATABASE_URL = (
-    f"mysql+pymysql://{user}:{encoded_password}@{host}:{port}/{db_name}"
-    f"?ssl_verify_cert=true&ssl_verify_identity=true"
-)
+SQLALCHEMY_DATABASE_URL = "mysql+pymysql://4Azm2c71xKGJzVb.root:G8Ch4jZmQgOGeLKA@gateway01.ap-southeast-1.prod.aws.tidbcloud.com:4000/finance_manager?ssl_verify_cert=true&ssl_verify_identity=true"
 engine = create_engine(SQLALCHEMY_DATABASE_URL, pool_pre_ping=True, pool_recycle=300)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

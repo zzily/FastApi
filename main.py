@@ -4,15 +4,33 @@ from sqlalchemy.orm import Session
 from sqlalchemy import create_engine, func
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
+
+import urllib
 from models import Transaction, TransactionStatus, SalaryLog, TransactionSettlement
 from typing import List, Optional
 from sqlalchemy import desc
 from fastapi.middleware.cors import CORSMiddleware
+import time
+from fastapi import Request
 import schemas
 
+import os
+
+# 读取环境变量
+user = os.getenv("DB_USER")
+password = os.getenv("DB_PASSWORD")
+host = os.getenv("DB_HOST")
+port = os.getenv("DB_PORT", "4000") # 默认为 4000
+db_name = os.getenv("DB_NAME", "finance_manager")
+
+encoded_password = urllib.parse.quote_plus(password)
+
 # 数据库配置
-SQLALCHEMY_DATABASE_URL = "mysql+pymysql://zzliy123:1RIZKR8PlDEUCxDZ@mysql6.sqlpub.com:3311/finance_manager"
-engine = create_engine(SQLALCHEMY_DATABASE_URL)
+SQLALCHEMY_DATABASE_URL = (
+    f"mysql+pymysql://{user}:{encoded_password}@{host}:{port}/{db_name}"
+    f"?ssl_verify_cert=true&ssl_verify_identity=true"
+)
+engine = create_engine(SQLALCHEMY_DATABASE_URL, pool_pre_ping=True, pool_recycle=300)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
@@ -33,6 +51,29 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+# --- 计时中间件 --- 
+@app.middleware("http")
+async def add_process_time_header(request: Request, call_next):
+    # 1. 记录开始时间
+    start_time = time.time()
+    
+    # 2. 处理请求 (调用具体的接口函数)
+    response = await call_next(request)
+    
+    # 3. 记录结束时间并计算耗时
+    process_time = time.time() - start_time
+    
+    # 4. 【关键步骤】将耗时添加到响应头 (Response Headers) 中
+    # 这样你在浏览器 F12 的 Network 面板里也能看到这个值
+    response.headers["X-Process-Time"] = str(process_time)
+    
+    # 5. 【可选】打印日志到控制台 (Zeabur 日志里能看到)
+    # 格式：[方法] 路径 - 耗时秒数
+    print(f"Checking Performance: {request.method} {request.url.path} - took {process_time:.4f} secs")
+    
+    return response
 
 # --- 业务接口 ---
 

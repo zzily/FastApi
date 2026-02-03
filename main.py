@@ -5,7 +5,6 @@ from sqlalchemy import create_engine, func
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 
-import urllib
 from models import Transaction, TransactionStatus, SalaryLog, TransactionSettlement
 from typing import List, Optional
 from sqlalchemy import desc
@@ -13,13 +12,15 @@ from fastapi.middleware.cors import CORSMiddleware
 import time
 from fastapi import Request
 import schemas
+from datetime import datetime
+import pytz
 
 
 
 # 数据库配置
 SQLALCHEMY_DATABASE_URL = "mysql+pymysql://4Azm2c71xKGJzVb.root:G8Ch4jZmQgOGeLKA@gateway01.ap-southeast-1.prod.aws.tidbcloud.com:4000/finance_manager?ssl_verify_cert=true&ssl_verify_identity=true"
 engine = create_engine(SQLALCHEMY_DATABASE_URL, pool_pre_ping=True, pool_recycle=300)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine, expire_on_commit=False)
 
 
 app = FastAPI(title="父亲财务监管系统")
@@ -40,6 +41,7 @@ def get_db():
     finally:
         db.close()
 
+BEIJING_TZ = pytz.timezone("Asia/Shanghai")
 
 # --- 计时中间件 --- 
 @app.middleware("http")
@@ -106,24 +108,32 @@ def read_salary_logs(
         
     # 按 ID 倒序
     logs = query.order_by(desc(SalaryLog.id)).offset(skip).limit(limit).all()
+    # 有时数据库或上一操作可能会留下 None 项（导致 FastAPI 在序列化时抛出 ResponseValidationError），
+    # 这里做一次保护性过滤，避免把 None 返回给客户端
+    logs = [log for log in logs if log is not None]
     return logs
 
-@app.post("/transactions/", response_model=schemas.TransactionRead, tags=["1. 记账 (债权)"])
+@app.post("/transactions/", tags=["1. 记账 (债权)"])
 def create_transaction(item: schemas.TransactionCreate, db: Session = Depends(get_db)):
     """记录你垫付的钱"""
+    amount_out_decimal = Decimal(str(item.amount_out))
     db_txn = Transaction(
         title=item.title,
-        amount_out=item.amount_out,
+        amount_out=amount_out_decimal,
         category=item.category,
-        amount_reimbursed=0, # 初始已还为0
+        created_at=datetime.now(BEIJING_TZ),
+        amount_reimbursed=Decimal("0"), # 初始已还为0
         status=TransactionStatus.pending
     )
-    db.add(db_txn)
-    db.commit()
-    db.refresh(db_txn)
-    return db_txn
+    try:
+        db.add(db_txn)
+        db.commit()
+        return "成功保存账单"
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"保存账单失败: {str(e)}")
 
-@app.post("/salary_logs/", response_model=schemas.SalaryLogRead, tags=["2. 入账 (资金池)"])
+@app.post("/salary_logs/", tags=["2. 入账 (资金池)"])
 def create_salary_log(item: schemas.SalaryLogCreate, db: Session = Depends(get_db)):
     """
     记录父亲收到的钱 (资金入池)。
@@ -134,25 +144,33 @@ def create_salary_log(item: schemas.SalaryLogCreate, db: Session = Depends(get_d
     """
     
     # 确定实际到账时间
-    actual_date = item.received_date if item.received_date else datetime.now()
+    actual_date = item.received_date if item.received_date else datetime.now(BEIJING_TZ)
+
+    # 使用 Decimal 来避免浮点精度问题，并在写入 DB 前保证类型正确
+    amount_decimal = Decimal(str(item.amount))
 
     db_salary = SalaryLog(
-        amount=item.amount,
+        amount=amount_decimal,
         
         # 【核心概念】
         # 刚入账时，这笔钱完全没被分配，所以"未使用金额"等于"总金额"。
         # 随着你调用 /settle 接口，这个字段会不断减少，直到变为 0。
-        amount_unused=item.amount, 
+        amount_unused=amount_decimal,
         source=item.source,
         remark=item.remark,
         month=item.month,
-        received_date=actual_date
+        received_date=actual_date,
+        created_at=datetime.now(BEIJING_TZ)
     )
-    
-    db.add(db_salary)
-    db.commit()
-    db.refresh(db_salary)
-    return db_salary
+
+    try:
+        db.add(db_salary)
+        db.commit()
+        return "成功保存回款记录"
+    except Exception as e:
+        db.rollback()
+        # 抛出友好的 HTTP 错误，方便客户端和日志排查
+        raise HTTPException(500, f"保存回款失败: {str(e)}")
 
 @app.post("/settle", tags=["3. 核销 (还钱)"])
 def settle_debt(item: schemas.SettleRequest, db: Session = Depends(get_db)):
@@ -197,7 +215,8 @@ def settle_debt(item: schemas.SettleRequest, db: Session = Depends(get_db)):
         settlement_log = TransactionSettlement(
             transaction_id=txn.id,
             salary_log_id=salary.id,
-            amount=settle_amount
+            amount=settle_amount,
+            created_at=datetime.now(BEIJING_TZ)
         )
         db.add(settlement_log)
         

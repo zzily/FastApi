@@ -7,6 +7,7 @@ from datetime import datetime
 from models import Transaction, TransactionStatus, SalaryLog, TransactionSettlement
 from typing import List, Optional
 from sqlalchemy import desc
+from fastapi.middleware.cors import CORSMiddleware
 import schemas
 
 # 数据库配置
@@ -14,7 +15,17 @@ SQLALCHEMY_DATABASE_URL = "mysql+pymysql://zzliy123:1RIZKR8PlDEUCxDZ@mysql6.sqlp
 engine = create_engine(SQLALCHEMY_DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+
 app = FastAPI(title="父亲财务监管系统")
+
+# 允许跨域请求 (方便手机和平板访问)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],        # 允许任何来源（手机、平板、其他电脑）
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 def get_db():
     db = SessionLocal()

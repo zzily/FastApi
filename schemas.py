@@ -14,6 +14,7 @@ class SettlementRead(BaseModel):
 class TransactionRead(BaseModel):
     id: int
     title: str
+    category: Category
     amount_out: float
     amount_reimbursed: float
     status: TransactionStatus
@@ -50,3 +51,8 @@ class SettleRequest(BaseModel):
     transaction_id: int
     salary_log_id: int
     amount: float = Field(..., gt=0, description="本次核销多少钱")
+
+class TransactionUpdate(BaseModel):
+    title: Optional[str] = None
+    amount_out: Optional[float] = Field(None, gt=0, description="垫付金额")
+    category: Optional[Category] = None

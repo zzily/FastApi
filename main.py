@@ -232,6 +232,37 @@ def settle_debt(item: schemas.SettleRequest, db: Session = Depends(get_db)):
         db.rollback()
         raise HTTPException(500, f"核销失败: {str(e)}")
 
+@app.put("/transactions/{transaction_id}", tags=["5. 更新账单"])
+def update_transaction(transaction_id: int, item: schemas.TransactionUpdate, db: Session = Depends(get_db)):
+    """更新账单信息"""
+    txn = db.query(Transaction).get(transaction_id)
+    if not txn:
+        raise HTTPException(404, "账单不存在")
+    
+    # 只允许更新标题和分类
+    txn.title = item.title
+    txn.amount_out = item.amount_out
+    txn.category = item.category
+
+    # 如果更新了 amount_out，需要重新计算状态
+    rest = txn.amount_out - txn.amount_reimbursed
+    if rest == 0:
+        txn.status = TransactionStatus.settled
+    if rest > 0:
+        if txn.amount_reimbursed == 0:
+            txn.status = TransactionStatus.pending
+        else:
+            txn.status = TransactionStatus.partially_settled
+    if rest < 0:
+        raise HTTPException(400, "更新后的垫付金额不能小于已还金额")
+    
+    try:
+        db.commit()
+        return "账单更新成功"
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"更新账单失败: {str(e)}")
+
 @app.get("/summary", tags=["4. 监控大盘"])
 def get_dashboard(db: Session = Depends(get_db)):
     """

@@ -1,7 +1,7 @@
 from decimal import Decimal
 from fastapi import FastAPI, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import create_engine, func
+from sqlalchemy import create_engine, func, case
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 
@@ -42,6 +42,10 @@ def get_db():
         db.close()
 
 BEIJING_TZ = pytz.timezone("Asia/Shanghai")
+PERSONAL_INCOME_SOURCES = [IncomeSource.salary, IncomeSource.other]  # 生活循环收入来源（不含报销款）
+BUSINESS_CATEGORIES = [category for category in Category if category != Category.personal]
+ACTION_USE_SALARY_FOR_PERSONAL = "使用工资收入核销个人消费"
+ACTION_USE_REIMBURSEMENT_FOR_BUSINESS = "使用报销款平公账"
 
 # --- 计时中间件 --- 
 @app.middleware("http")
@@ -271,18 +275,16 @@ def get_dashboard(db: Session = Depends(get_db)):
     只计算：我出了多少？回了多少？还差多少？
     """
 
-    salary_sources = [IncomeSource.salary, IncomeSource.other]
-
     # --- A. 经营循环 (为了平账) ---
     business_lent = db.query(func.sum(Transaction.amount_out))\
-        .filter(Transaction.category != Category.personal).scalar() or Decimal("0")
+        .filter(Transaction.category.in_(BUSINESS_CATEGORIES)).scalar() or Decimal("0")
     business_reimbursed = db.query(func.sum(SalaryLog.amount))\
         .filter(SalaryLog.source == IncomeSource.reimbursement).scalar() or Decimal("0")
     business_debt = business_lent - business_reimbursed
 
     # --- B. 生活循环 (为了存钱) ---
     salary_income = db.query(func.sum(SalaryLog.amount))\
-        .filter(SalaryLog.source.in_(salary_sources)).scalar() or Decimal("0")
+        .filter(SalaryLog.source.in_(PERSONAL_INCOME_SOURCES)).scalar() or Decimal("0")
     personal_spending = db.query(func.sum(Transaction.amount_out))\
         .filter(Transaction.category == Category.personal).scalar() or Decimal("0")
     net_savings = salary_income - personal_spending
@@ -290,32 +292,40 @@ def get_dashboard(db: Session = Depends(get_db)):
     # --- C. 资金池与核销进度 ---
     ledger_outstanding = db.query(
         func.sum(Transaction.amount_out - Transaction.amount_reimbursed)
-    ).scalar() or Decimal("0")
+    ).filter(Transaction.status != TransactionStatus.settled).scalar() or Decimal("0")
     wallet_unallocated = db.query(func.sum(SalaryLog.amount_unused)).scalar() or Decimal("0")
 
-    salary_wallet = db.query(func.sum(SalaryLog.amount_unused))\
-        .filter(SalaryLog.source.in_(salary_sources)).scalar() or Decimal("0")
-    reimbursement_wallet = db.query(func.sum(SalaryLog.amount_unused))\
-        .filter(SalaryLog.source == IncomeSource.reimbursement).scalar() or Decimal("0")
+    salary_wallet, reimbursement_wallet = db.query(
+        func.sum(case(
+            (SalaryLog.source.in_(PERSONAL_INCOME_SOURCES), SalaryLog.amount_unused),
+            else_=0
+        )),
+        func.sum(case(
+            (SalaryLog.source == IncomeSource.reimbursement, SalaryLog.amount_unused),
+            else_=0
+        ))
+    ).one()
+    salary_wallet = salary_wallet or Decimal("0")
+    reimbursement_wallet = reimbursement_wallet or Decimal("0")
 
-    personal_unsettled = db.query(
-        func.sum(Transaction.amount_out - Transaction.amount_reimbursed)
-    ).filter(
-        Transaction.category == Category.personal,
-        Transaction.status != TransactionStatus.settled
-    ).scalar() or Decimal("0")
-    business_unsettled = db.query(
-        func.sum(Transaction.amount_out - Transaction.amount_reimbursed)
-    ).filter(
-        Transaction.category != Category.personal,
-        Transaction.status != TransactionStatus.settled
-    ).scalar() or Decimal("0")
+    personal_unsettled, business_unsettled = db.query(
+        func.sum(case(
+            (Transaction.category == Category.personal, Transaction.amount_out - Transaction.amount_reimbursed),
+            else_=0
+        )),
+        func.sum(case(
+            (Transaction.category.in_(BUSINESS_CATEGORIES), Transaction.amount_out - Transaction.amount_reimbursed),
+            else_=0
+        ))
+    ).filter(Transaction.status != TransactionStatus.settled).one()
+    personal_unsettled = personal_unsettled or Decimal("0")
+    business_unsettled = business_unsettled or Decimal("0")
 
     action_suggestions = []
-    if personal_unsettled > 0 and salary_wallet > 0:
-        action_suggestions.append("使用工资收入核销个人消费")
-    if business_unsettled > 0 and reimbursement_wallet > 0:
-        action_suggestions.append("使用报销款平公账")
+    if personal_unsettled > Decimal("0") and salary_wallet > Decimal("0"):
+        action_suggestions.append(ACTION_USE_SALARY_FOR_PERSONAL)
+    if business_unsettled > Decimal("0") and reimbursement_wallet > Decimal("0"):
+        action_suggestions.append(ACTION_USE_REIMBURSEMENT_FOR_BUSINESS)
 
     return {
         "financial_status": {
@@ -323,14 +333,14 @@ def get_dashboard(db: Session = Depends(get_db)):
             "total_business_lent": float(business_lent),
             "total_reimbursed": float(business_reimbursed),
             "business_debt": float(business_debt),
-            "status": "老板还欠我们钱，请催报销。" if business_debt > 0 else "经营账已平，无坏账。"
+            "status": "老板还欠我钱，请催报销。" if business_debt > 0 else "经营账已结清或有盈余。"
         },
         "life_status": {
             "description": "生活循环 (为了存钱)",
             "total_income": float(salary_income),
             "total_personal_spending": float(personal_spending),
             "net_savings": float(net_savings),
-            "status": "本期净储蓄稳步增长，继续保持。" if net_savings >= 0 else "本期净储蓄为负，建议控制支出。"
+            "status": "净储蓄保持平衡或盈余，继续保持。" if net_savings >= 0 else "净储蓄为负，建议控制支出。"
         },
         "operational_status": {
             "description": "资金池与核销建议",
@@ -338,6 +348,6 @@ def get_dashboard(db: Session = Depends(get_db)):
             "cash_waiting_allocation": float(wallet_unallocated),
             "salary_cash_available": float(salary_wallet),
             "reimbursement_cash_available": float(reimbursement_wallet),
-            "action_needed": "；".join(action_suggestions) if action_suggestions else "暂无操作"
+            "action_needed": "; ".join(action_suggestions) if action_suggestions else "暂无操作"
         }
     }

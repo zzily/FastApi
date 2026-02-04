@@ -1,11 +1,11 @@
 from decimal import Decimal
 from fastapi import FastAPI, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import create_engine, func
+from sqlalchemy import create_engine, func, case
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 
-from models import Transaction, TransactionStatus, SalaryLog, TransactionSettlement
+from models import Transaction, TransactionStatus, SalaryLog, TransactionSettlement, Category, IncomeSource
 from typing import List, Optional
 from sqlalchemy import desc
 from fastapi.middleware.cors import CORSMiddleware
@@ -42,6 +42,10 @@ def get_db():
         db.close()
 
 BEIJING_TZ = pytz.timezone("Asia/Shanghai")
+PERSONAL_INCOME_SOURCES = [IncomeSource.salary, IncomeSource.other]  # 生活循环收入来源（不含报销款）
+BUSINESS_CATEGORIES = [category for category in Category if category != Category.personal]
+ACTION_USE_SALARY_FOR_PERSONAL = "使用工资收入核销个人消费"
+ACTION_USE_REIMBURSEMENT_FOR_BUSINESS = "使用报销款平公账"
 
 # --- 计时中间件 --- 
 @app.middleware("http")
@@ -270,45 +274,80 @@ def get_dashboard(db: Session = Depends(get_db)):
     不管父亲的钱是工资还是老板报销，也不管他私吞了没。
     只计算：我出了多少？回了多少？还差多少？
     """
-    
-    # --- A. 宏观总账 (绝对真理) ---
-    
-    # 1. 你垫付的总金额 (你流出的钱)
-    total_principal = db.query(func.sum(Transaction.amount_out)).scalar() or 0
-    
-    # 2. 父亲转给你的总金额 (你流入的钱 - 无论名义是工资还是加油费)
-    total_received = db.query(func.sum(SalaryLog.amount)).scalar() or 0
-    
-    # 3. 实际净欠款
-    # 正数 = 父亲还欠你的
-    # 负数 = 父亲多转给你了 (或者你还没垫付那么多)
-    net_debt = total_principal - total_received
 
+    # --- A. 经营循环 (为了平账) ---
+    business_lent = db.query(func.sum(Transaction.amount_out))\
+        .filter(Transaction.category.in_(BUSINESS_CATEGORIES)).scalar() or Decimal("0")
+    business_reimbursed = db.query(func.sum(SalaryLog.amount))\
+        .filter(SalaryLog.source == IncomeSource.reimbursement).scalar() or Decimal("0")
+    business_debt = business_lent - business_reimbursed
 
-    # --- B. 记账操作状态 (你的工作进度) ---
-    
-    # 4. 账单上显示的"未结清金额"
-    # 这是你还没有点"settle"的所有账单总额
+    # --- B. 生活循环 (为了存钱) ---
+    salary_income = db.query(func.sum(SalaryLog.amount))\
+        .filter(SalaryLog.source.in_(PERSONAL_INCOME_SOURCES)).scalar() or Decimal("0")
+    personal_spending = db.query(func.sum(Transaction.amount_out))\
+        .filter(Transaction.category == Category.personal).scalar() or Decimal("0")
+    net_savings = salary_income - personal_spending
+
+    # --- C. 资金池与核销进度 ---
     ledger_outstanding = db.query(
         func.sum(Transaction.amount_out - Transaction.amount_reimbursed)
-    ).scalar() or 0
-    
-    # 5. 资金池里的"闲置余额"
-    # 父亲转给你了，但你还没分配到具体账单上的钱
-    wallet_unallocated = db.query(func.sum(SalaryLog.amount_unused)).scalar() or 0
+    ).filter(Transaction.status != TransactionStatus.settled).scalar() or Decimal("0")
+    wallet_unallocated = db.query(func.sum(SalaryLog.amount_unused)).scalar() or Decimal("0")
+
+    salary_wallet, reimbursement_wallet = db.query(
+        func.sum(case(
+            (SalaryLog.source.in_(PERSONAL_INCOME_SOURCES), SalaryLog.amount_unused),
+            else_=0
+        )),
+        func.sum(case(
+            (SalaryLog.source == IncomeSource.reimbursement, SalaryLog.amount_unused),
+            else_=0
+        ))
+    ).one()
+    salary_wallet = salary_wallet or Decimal("0")
+    reimbursement_wallet = reimbursement_wallet or Decimal("0")
+
+    personal_unsettled, business_unsettled = db.query(
+        func.sum(case(
+            (Transaction.category == Category.personal, Transaction.amount_out - Transaction.amount_reimbursed),
+            else_=0
+        )),
+        func.sum(case(
+            (Transaction.category.in_(BUSINESS_CATEGORIES), Transaction.amount_out - Transaction.amount_reimbursed),
+            else_=0
+        ))
+    ).filter(Transaction.status != TransactionStatus.settled).one()
+    personal_unsettled = personal_unsettled or Decimal("0")
+    business_unsettled = business_unsettled or Decimal("0")
+
+    action_suggestions = []
+    if personal_unsettled > Decimal("0") and salary_wallet > Decimal("0"):
+        action_suggestions.append(ACTION_USE_SALARY_FOR_PERSONAL)
+    if business_unsettled > Decimal("0") and reimbursement_wallet > Decimal("0"):
+        action_suggestions.append(ACTION_USE_REIMBURSEMENT_FOR_BUSINESS)
 
     return {
         "financial_status": {
-            "description": "资金往来总览 (硬账)",
-            "total_lent_by_you": float(total_principal),    # 你一共垫了多少
-            "total_received_back": float(total_received),   # 一共回血多少
-            "current_net_debt": float(net_debt),            # 【核心指标】还差多少平账
-            "status": "父亲仍欠款" if net_debt > 0 else "已回本/有盈余"
+            "description": "经营循环 (为了平账)",
+            "total_business_lent": float(business_lent),
+            "total_reimbursed": float(business_reimbursed),
+            "business_debt": float(business_debt),
+            "status": "老板还欠我钱，请催报销。" if business_debt > 0 else "经营账已结清或有盈余。"
+        },
+        "life_status": {
+            "description": "生活循环 (为了存钱)",
+            "total_income": float(salary_income),
+            "total_personal_spending": float(personal_spending),
+            "net_savings": float(net_savings),
+            "status": "净储蓄保持平衡或盈余，继续保持。" if net_savings >= 0 else "净储蓄为负，建议控制支出。"
         },
         "operational_status": {
-            "description": "记账操作概览 (软账)",
-            "bills_pending_settlement": float(ledger_outstanding), # 待核销的账单金额
-            "cash_waiting_allocation": float(wallet_unallocated),  # 待分配的现金余额
-            "action_needed": "有闲钱，快去销账(Settle)" if wallet_unallocated > 0 and ledger_outstanding > 0 else "暂无操作"
+            "description": "资金池与核销建议",
+            "bills_pending_settlement": float(ledger_outstanding),
+            "cash_waiting_allocation": float(wallet_unallocated),
+            "salary_cash_available": float(salary_wallet),
+            "reimbursement_cash_available": float(reimbursement_wallet),
+            "action_needed": "; ".join(action_suggestions) if action_suggestions else "暂无操作"
         }
     }

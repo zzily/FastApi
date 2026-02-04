@@ -263,52 +263,102 @@ def update_transaction(transaction_id: int, item: schemas.TransactionUpdate, db:
         db.rollback()
         raise HTTPException(500, f"更新账单失败: {str(e)}")
 
+@app.delete("/transactions/{transaction_id}", tags=["5. 删除账单"])
+def delete_transaction(transaction_id: int, db: Session = Depends(get_db)):
+    """删除账单"""
+    txn = db.query(Transaction).get(transaction_id)
+    if not txn:
+        raise HTTPException(404, "账单不存在")
+    
+    try:
+        db.delete(txn)
+        db.commit()
+        return "账单删除成功"
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"删除账单失败: {str(e)}")
+
 @app.get("/summary", tags=["4. 监控大盘"])
 def get_dashboard(db: Session = Depends(get_db)):
-    """
-    【债权人终极监控】
-    不管父亲的钱是工资还是老板报销，也不管他私吞了没。
-    只计算：我出了多少？回了多少？还差多少？
-    """
     
-    # --- A. 宏观总账 (绝对真理) ---
+    # ==========================
+    # 1. 支出端 (Transaction) - 拆分“个人”与“公事”
+    # ==========================
     
-    # 1. 你垫付的总金额 (你流出的钱)
-    total_principal = db.query(func.sum(Transaction.amount_out)).scalar() or 0
+    # A. 个人总开销 (Category = "personal" 或 "个人")
+    # 逻辑：这些钱是花了就没了，属于纯消费，扣减家庭资产
+    total_personal_spending = db.query(func.sum(Transaction.amount_out))\
+        .filter(Transaction.category.in_(["personal", "个人", "家庭", "生活"])).scalar() or 0
+        
+    # B. 总垫付金额 (Total)
+    total_out = db.query(func.sum(Transaction.amount_out)).scalar() or 0
     
-    # 2. 父亲转给你的总金额 (你流入的钱 - 无论名义是工资还是加油费)
-    total_received = db.query(func.sum(SalaryLog.amount)).scalar() or 0
-    
-    # 3. 实际净欠款
-    # 正数 = 父亲还欠你的
-    # 负数 = 父亲多转给你了 (或者你还没垫付那么多)
-    net_debt = total_principal - total_received
+    # C. 公务垫付 (Business) = 总支出 - 个人开销
+    # 逻辑：这些钱是替老板垫的，理论上应该通过报销拿回来
+    total_business_lent = float(total_out) - float(total_personal_spending)
 
-
-    # --- B. 记账操作状态 (你的工作进度) ---
+    # ==========================
+    # 2. 收入端 (SalaryLog) - 拆分“工资”与“报销”
+    # ==========================
     
-    # 4. 账单上显示的"未结清金额"
-    # 这是你还没有点"settle"的所有账单总额
+    # A. 报销回款 (Source = "reimbursement")
+    total_reimbursed_from_boss = db.query(func.sum(SalaryLog.amount))\
+        .filter(SalaryLog.source == "reimbursement").scalar() or 0
+        
+    # B. 工资收入 (Source = "salary")
+    total_salary_income = db.query(func.sum(SalaryLog.amount))\
+        .filter(SalaryLog.source == "salary").scalar() or 0
+
+    # ==========================
+    # 3. 核心指标计算 (两大循环)
+    # ==========================
+
+    # 【循环一：生意账】经营性欠款
+    # 公式：公务垫付 - 报销回款
+    real_business_debt = float(total_business_lent) - float(total_reimbursed_from_boss)
+
+    # 【循环二：生活账】家庭净储蓄 (Net Savings)
+    # 公式：工资总收入 - 个人总花销
+    # 这才是你真正攒下的钱！
+    net_family_savings = float(total_salary_income) - float(total_personal_spending)
+
+    # ==========================
+    # 4. 资产现状 (流动性)
+    # ==========================
+    # 无论钱怎么归类，现在的资产 = 兜里的现金 + 别人欠的钱
     ledger_outstanding = db.query(
         func.sum(Transaction.amount_out - Transaction.amount_reimbursed)
     ).scalar() or 0
-    
-    # 5. 资金池里的"闲置余额"
-    # 父亲转给你了，但你还没分配到具体账单上的钱
     wallet_unallocated = db.query(func.sum(SalaryLog.amount_unused)).scalar() or 0
+    total_assets = float(wallet_unallocated) + float(ledger_outstanding)
 
     return {
         "financial_status": {
-            "description": "资金往来总览 (硬账)",
-            "total_lent_by_you": float(total_principal),    # 你一共垫了多少
-            "total_received_back": float(total_received),   # 一共回血多少
-            "current_net_debt": float(net_debt),            # 【核心指标】还差多少平账
-            "status": "父亲仍欠款" if net_debt > 0 else "已回本/有盈余"
+            "description": "家庭财务双循环",
+            
+            # 1. 生意视角 (老板欠我多少?)
+            "business_loop": {
+                "total_lent": float(total_business_lent),          # 替公司垫了多少
+                "total_reimbursed": float(total_reimbursed_from_boss), # 报销回来多少
+                "current_debt": real_business_debt,                # 还有多少没报销 (核心指标1)
+                "status": "等待报销" if real_business_debt > 0 else "已平账"
+            },
+
+            # 2. 家庭视角 (我存了多少?)
+            "family_loop": {
+                "gross_income": float(total_salary_income),        # 总工资
+                "personal_spending": float(total_personal_spending), # 败家花了多少
+                "net_savings": net_family_savings,                 # 净攒下来的钱 (核心指标2)
+                "status": "资产增值中" if net_family_savings > 0 else "入不敷出"
+            },
+            
+            "total_assets": total_assets # 当前总资产
         },
+        # operational_status 
         "operational_status": {
-            "description": "记账操作概览 (软账)",
-            "bills_pending_settlement": float(ledger_outstanding), # 待核销的账单金额
-            "cash_waiting_allocation": float(wallet_unallocated),  # 待分配的现金余额
-            "action_needed": "有闲钱，快去销账(Settle)" if wallet_unallocated > 0 and ledger_outstanding > 0 else "暂无操作"
+            "description": "操作概览",
+            "bills_pending_settlement": float(ledger_outstanding),
+            "cash_waiting_allocation": float(wallet_unallocated),
+            "action_needed": "有闲钱，快去销账" if wallet_unallocated > 0 and ledger_outstanding > 0 else "暂无操作"
         }
     }

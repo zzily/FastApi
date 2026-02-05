@@ -46,6 +46,14 @@ class SalaryLogCreate(BaseModel):
     remark: Optional[str] = None
     # 新增字段，允许用户指定日期，如果不填则默认为 None (由后端处理为当前时间)
     received_date: Optional[datetime] = None
+    
+
+class SalaryLogUpdate(BaseModel):
+    amount: Decimal
+    source: IncomeSource         # "salary" 或 "reimbursement"
+    received_date: Optional[datetime] = None
+    remark: Optional[str] = None
+    month: Optional[str] = None
 
 class SettleRequest(BaseModel):
     transaction_id: int

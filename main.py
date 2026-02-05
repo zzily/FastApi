@@ -172,6 +172,47 @@ def create_salary_log(item: schemas.SalaryLogCreate, db: Session = Depends(get_d
         # 抛出友好的 HTTP 错误，方便客户端和日志排查
         raise HTTPException(500, f"保存回款失败: {str(e)}")
 
+@app.put("/salary_logs/{salary_log_id}", response_model=schemas.SalaryLogRead, tags=["2. 入账 (资金池)"])
+def update_salary_log(salary_log_id: int, item: schemas.SalaryLogUpdate, db: Session = Depends(get_db)):
+    """
+    更新入账记录。
+    【核心逻辑】如果修改了金额，必须保证 新金额 >= 已用金额。
+    系统会自动重新计算 amount_unused。
+    """
+    # 1. 获取原记录
+    log = db.query(SalaryLog).get(salary_log_id)
+    if not log:
+        raise HTTPException(404, "记录不存在")
+    
+    # 2. 计算这笔钱已经用了多少 (Used = Total - Unused)
+    amount_used = log.amount - log.amount_unused
+    
+    # 3. 校验新金额是否合法
+    # 如果要把总金额改小，不能小于已经花出去的钱，否则账就不平了
+    if item.amount < amount_used:
+        raise HTTPException(400, f"金额修改失败！该笔资金已核销使用了 {amount_used} 元，新金额不能低于此数值。")
+
+    # 4. 更新字段
+    log.source = item.source
+    log.remark = item.remark
+    log.month = item.month
+    
+    if item.received_date:
+        log.received_date = item.received_date
+
+    # 5. 【关键】重新计算剩余金额
+    # 新的剩余 = 新的总额 - (之前已经花掉的)
+    log.amount = item.amount
+    log.amount_unused = item.amount - amount_used
+
+    try:
+        db.commit()
+        db.refresh(log)
+        return log
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"更新失败: {str(e)}")
+
 @app.post("/settle", tags=["3. 核销 (还钱)"])
 def settle_debt(item: schemas.SettleRequest, db: Session = Depends(get_db)):
     """

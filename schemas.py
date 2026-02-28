@@ -1,15 +1,25 @@
 from pydantic import BaseModel, Field
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, Any
 from decimal import Decimal
 from models import TransactionStatus, Category, IncomeSource
 
+
+# --- Unified response model ---
+class ApiResponse(BaseModel):
+    code: int = 200
+    message: str = "success"
+    data: Any = None
+
+
+# --- Read models ---
 class SettlementRead(BaseModel):
     id: int
     amount: float
     created_at: datetime
     class Config:
         from_attributes = True
+
 
 class TransactionRead(BaseModel):
     id: int
@@ -22,6 +32,7 @@ class TransactionRead(BaseModel):
     class Config:
         from_attributes = True
 
+
 class SalaryLogRead(BaseModel):
     id: int
     amount: float
@@ -33,34 +44,39 @@ class SalaryLogRead(BaseModel):
     class Config:
         from_attributes = True
 
-# 请求参数模型
+
+# --- Create models ---
 class TransactionCreate(BaseModel):
     title: str
     amount_out: float = Field(..., gt=0, description="垫付金额")
     category: Category = Category.work
 
+
 class SalaryLogCreate(BaseModel):
     amount: float = Field(..., gt=0, description="实际到手金额")
     month: str = Field(..., example="2023-10")
-    source: IncomeSource = IncomeSource.salary # 默认是工资，可选 reimbursement
+    source: IncomeSource = IncomeSource.salary
     remark: Optional[str] = None
-    # 新增字段，允许用户指定日期，如果不填则默认为 None (由后端处理为当前时间)
     received_date: Optional[datetime] = None
-    
 
+
+# --- Update models ---
 class SalaryLogUpdate(BaseModel):
     amount: Decimal
-    source: IncomeSource         # "salary" 或 "reimbursement"
+    source: IncomeSource
     received_date: Optional[datetime] = None
     remark: Optional[str] = None
     month: Optional[str] = None
 
-class SettleRequest(BaseModel):
-    transaction_id: int
-    salary_log_id: int
-    amount: float = Field(..., gt=0, description="本次核销多少钱")
 
 class TransactionUpdate(BaseModel):
     title: Optional[str] = None
     amount_out: Optional[float] = Field(None, gt=0, description="垫付金额")
     category: Optional[Category] = None
+
+
+# --- Request models ---
+class SettleRequest(BaseModel):
+    transaction_id: int
+    salary_log_id: int
+    amount: float = Field(..., gt=0, description="本次核销多少钱")

@@ -290,6 +290,32 @@ def update_salary_log(salary_log_id: int, item: schemas.SalaryLogUpdate, db: Ses
         raise HTTPException(500, f"更新失败: {e}")
 
 
+@app.delete("/salary_logs/{salary_log_id}", tags=["2. 入账 (资金池)"])
+def delete_salary_log(salary_log_id: int, db: Session = Depends(get_db)):
+    """删除回款记录（有核销记录时禁止删除）"""
+    log = db.get(SalaryLog, salary_log_id)
+    if not log:
+        raise HTTPException(404, "记录不存在")
+
+    settlement_count = db.query(func.count(TransactionSettlement.id)).filter(
+        TransactionSettlement.salary_log_id == salary_log_id
+    ).scalar()
+    if settlement_count > 0:
+        raise HTTPException(
+            400,
+            f"该回款已被 {settlement_count} 条核销记录引用，无法直接删除。请先撤销相关核销。",
+        )
+
+    try:
+        db.delete(log)
+        db.commit()
+        return ok("回款记录删除成功")
+    except Exception as e:
+        db.rollback()
+        logger.error("删除回款失败: %s", e)
+        raise HTTPException(500, f"删除回款失败: {e}")
+
+
 # --- Settlement endpoint ---
 
 @app.post("/settle", tags=["3. 核销 (还钱)"])

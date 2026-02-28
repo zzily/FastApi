@@ -7,7 +7,8 @@ from typing import List
 import pytz
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import create_engine, func, desc, select
+from collections import defaultdict
+from sqlalchemy import create_engine, func, desc, select, extract
 from sqlalchemy.orm import Session, sessionmaker
 
 import schemas
@@ -57,6 +58,69 @@ async def add_process_time_header(request: Request, call_next):
     response.headers["X-Process-Time"] = str(process_time)
     logger.info("%s %s - %.4fs", request.method, request.url.path, process_time)
     return response
+
+
+# --- Chart data helper ---
+
+def _build_chart_data(db: Session) -> dict:
+    """Aggregate monthly income vs spending for charts."""
+
+    # Monthly spending by category
+    spending_rows = db.query(
+        func.date_format(Transaction.created_at, "%Y-%m").label("month"),
+        Transaction.category,
+        func.sum(Transaction.amount_out).label("total"),
+    ).group_by("month", Transaction.category).all()
+
+    # Monthly income by source
+    income_rows = db.query(
+        SalaryLog.month,
+        SalaryLog.source,
+        func.sum(SalaryLog.amount).label("total"),
+    ).group_by(SalaryLog.month, SalaryLog.source).all()
+
+    # Merge into monthly timeline
+    months: dict = defaultdict(lambda: {
+        "month": "",
+        "income_salary": 0,
+        "income_reimbursement": 0,
+        "spending_work": 0,
+        "spending_personal": 0,
+    })
+
+    for row in spending_rows:
+        m = months[row.month]
+        m["month"] = row.month
+        if row.category == Category.work:
+            m["spending_work"] = float(row.total)
+        else:
+            m["spending_personal"] = float(row.total)
+
+    for row in income_rows:
+        m = months[row.month]
+        m["month"] = row.month
+        if row.source == "salary":
+            m["income_salary"] = float(row.total)
+        elif row.source == "reimbursement":
+            m["income_reimbursement"] = float(row.total)
+
+    timeline = sorted(months.values(), key=lambda x: x["month"])
+
+    # Category breakdown (pie chart)
+    category_rows = db.query(
+        Transaction.category,
+        func.sum(Transaction.amount_out).label("total"),
+    ).group_by(Transaction.category).all()
+
+    category_breakdown = [
+        {"name": "工作垫付" if r.category == Category.work else "个人消费", "value": float(r.total)}
+        for r in category_rows
+    ]
+
+    return {
+        "monthly_timeline": timeline,
+        "category_breakdown": category_breakdown,
+    }
 
 
 # --- Transaction endpoints ---
@@ -281,6 +345,85 @@ def settle_debt(item: schemas.SettleRequest, db: Session = Depends(get_db)):
         raise HTTPException(500, f"核销失败: {e}")
 
 
+# --- Settlement history & undo ---
+
+@app.get("/transactions/{transaction_id}/settlements", tags=["3. 核销 (还钱)"])
+def get_transaction_settlements(transaction_id: int, db: Session = Depends(get_db)):
+    """获取某账单的核销历史明细"""
+    txn = db.get(Transaction, transaction_id)
+    if not txn:
+        raise HTTPException(404, "账单不存在")
+
+    records = (
+        db.query(TransactionSettlement)
+        .filter(TransactionSettlement.transaction_id == transaction_id)
+        .order_by(desc(TransactionSettlement.created_at))
+        .all()
+    )
+
+    result = []
+    for r in records:
+        salary = db.get(SalaryLog, r.salary_log_id)
+        result.append({
+            "id": r.id,
+            "transaction_id": r.transaction_id,
+            "salary_log_id": r.salary_log_id,
+            "amount": float(r.amount),
+            "salary_month": salary.month if salary else "未知",
+            "salary_source": salary.source if salary else "other",
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        })
+
+    return ok("获取成功", result)
+
+
+@app.delete("/settlements/{settlement_id}", tags=["3. 核销 (还钱)"])
+def undo_settlement(settlement_id: int, db: Session = Depends(get_db)):
+    """撤销一条核销记录，恢复资金池余额和账单状态"""
+    record = db.get(TransactionSettlement, settlement_id)
+    if not record:
+        raise HTTPException(404, "核销记录不存在")
+
+    txn = db.execute(
+        select(Transaction).where(Transaction.id == record.transaction_id).with_for_update()
+    ).scalar_one_or_none()
+    salary = db.execute(
+        select(SalaryLog).where(SalaryLog.id == record.salary_log_id).with_for_update()
+    ).scalar_one_or_none()
+
+    if not txn:
+        raise HTTPException(404, "关联账单不存在")
+    if not salary:
+        raise HTTPException(404, "关联回款记录不存在")
+
+    try:
+        # Reverse the settlement
+        txn.amount_reimbursed -= record.amount
+        salary.amount_unused += record.amount
+
+        # Recalculate transaction status
+        if txn.amount_reimbursed <= 0:
+            txn.amount_reimbursed = Decimal("0")
+            txn.status = TransactionStatus.pending
+        elif txn.amount_reimbursed < txn.amount_out:
+            txn.status = TransactionStatus.partially_settled
+        else:
+            txn.status = TransactionStatus.settled
+
+        db.delete(record)
+        db.commit()
+
+        return ok("撤销成功", {
+            "transaction_status": txn.status,
+            "transaction_remaining_debt": float(txn.amount_out - txn.amount_reimbursed),
+            "salary_remaining": float(salary.amount_unused),
+        })
+    except Exception as e:
+        db.rollback()
+        logger.error("撤销核销失败: %s", e)
+        raise HTTPException(500, f"撤销核销失败: {e}")
+
+
 # --- Dashboard endpoint ---
 
 @app.get("/summary", tags=["4. 监控大盘"])
@@ -316,6 +459,7 @@ def get_dashboard(db: Session = Depends(get_db)):
     total_assets = float(wallet_unallocated) + float(ledger_outstanding)
 
     return ok("获取成功", {
+        "chart_data": _build_chart_data(db),
         "financial_status": {
             "description": "家庭财务双循环",
             "business_loop": {

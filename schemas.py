@@ -21,6 +21,19 @@ class SettlementRead(BaseModel):
         from_attributes = True
 
 
+class SettlementDetailRead(BaseModel):
+    """Settlement record with related salary log info for history view."""
+    id: int
+    transaction_id: int
+    salary_log_id: int
+    amount: float
+    salary_month: str
+    salary_source: IncomeSource
+    created_at: datetime
+    class Config:
+        from_attributes = True
+
+
 class TransactionRead(BaseModel):
     id: int
     title: str

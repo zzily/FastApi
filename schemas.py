@@ -83,6 +83,7 @@ class SalaryLogUpdate(BaseModel):
 
 
 class TransactionUpdate(BaseModel):
+    """PATCH-like payload: omitted fields keep their existing values."""
     title: Optional[str] = None
     amount_out: Optional[float] = Field(None, gt=0, description="垫付金额")
     category: Optional[Category] = None

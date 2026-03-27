@@ -21,7 +21,8 @@ class SalaryLogApiTests(BaseApiTestCase):
 
         self.assertEqual(update_response.status_code, 200)
         body = update_response.json()
-        self.assertEqual(body["month"], "2024-01")
-        self.assertEqual(body["remark"], "调整金额")
-        self.assertEqual(body["amount"], 120.0)
-        self.assertEqual(body["amount_unused"], 120.0)
+        self.assertEqual(body["code"], 200)
+        self.assertEqual(body["data"]["month"], "2024-01")
+        self.assertEqual(body["data"]["remark"], "调整金额")
+        self.assertEqual(body["data"]["amount"], 120.0)
+        self.assertEqual(body["data"]["amount_unused"], 120.0)

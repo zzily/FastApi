@@ -70,6 +70,7 @@ def update_transaction(db: Session, transaction_id: int, item: TransactionUpdate
 
     try:
         db.commit()
+        db.refresh(transaction)
         return transaction
     except Exception:
         db.rollback()

@@ -16,7 +16,8 @@ class TransactionApiTests(BaseApiTestCase):
         list_response = self.client.get("/transactions/", params={"unpaid_only": True})
 
         self.assertEqual(list_response.status_code, 200)
-        items = list_response.json()
-        self.assertEqual(len(items), 1)
-        self.assertEqual(items[0]["title"], "垫付办公用品")
-        self.assertEqual(items[0]["status"], "pending")
+        body = list_response.json()
+        self.assertEqual(body["code"], 200)
+        self.assertEqual(len(body["data"]), 1)
+        self.assertEqual(body["data"][0]["title"], "垫付办公用品")
+        self.assertEqual(body["data"][0]["status"], "pending")

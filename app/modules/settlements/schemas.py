@@ -2,7 +2,13 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.domain.enums import IncomeSource
+from app.domain.enums import IncomeSource, TransactionStatus
+
+
+class SettlementActionResult(BaseModel):
+    transaction_status: TransactionStatus
+    salary_remaining: float
+    transaction_remaining_debt: float
 
 
 class SettlementRead(BaseModel):

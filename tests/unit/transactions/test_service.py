@@ -21,6 +21,7 @@ class DummySession:
         self.transaction = transaction
         self.committed = False
         self.rolled_back = False
+        self.refreshed = False
 
     def get(self, model, transaction_id):
         if transaction_id == self.transaction.id:
@@ -32,6 +33,9 @@ class DummySession:
 
     def rollback(self):
         self.rolled_back = True
+
+    def refresh(self, transaction):
+        self.refreshed = transaction is self.transaction
 
 
 class TransactionServiceTests(unittest.TestCase):
@@ -51,6 +55,7 @@ class TransactionServiceTests(unittest.TestCase):
         result = update_transaction(db, 1, payload)
 
         self.assertTrue(db.committed)
+        self.assertTrue(db.refreshed)
         self.assertEqual(result.title, "原始标题")
         self.assertEqual(result.category, Category.work)
         self.assertEqual(result.amount_out, Decimal("120"))

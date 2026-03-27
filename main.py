@@ -49,6 +49,15 @@ def ok(message: str = "success", data=None) -> dict:
     return {"code": 200, "message": message, "data": data}
 
 
+def _calculate_transaction_status(amount_out: Decimal, amount_reimbursed: Decimal) -> TransactionStatus:
+    """Calculate transaction status from total/outstanding amounts."""
+    if amount_reimbursed <= 0:
+        return TransactionStatus.pending
+    if amount_reimbursed >= amount_out:
+        return TransactionStatus.settled
+    return TransactionStatus.partially_settled
+
+
 # --- Timing middleware ---
 @app.middleware("http")
 async def add_process_time_header(request: Request, call_next):
@@ -163,24 +172,22 @@ def create_transaction(item: schemas.TransactionCreate, db: Session = Depends(ge
 
 @app.put("/transactions/{transaction_id}", tags=["5. 更新账单"])
 def update_transaction(transaction_id: int, item: schemas.TransactionUpdate, db: Session = Depends(get_db)):
-    """更新账单信息"""
+    """部分更新账单信息（仅更新请求中提供的字段）"""
     txn = db.get(Transaction, transaction_id)
     if not txn:
         raise HTTPException(404, "账单不存在")
 
-    txn.title = item.title
-    txn.amount_out = item.amount_out
-    txn.category = item.category
+    if item.title is not None:
+        txn.title = item.title
+    if item.amount_out is not None:
+        txn.amount_out = Decimal(str(item.amount_out))
+    if item.category is not None:
+        txn.category = item.category
 
     rest = txn.amount_out - txn.amount_reimbursed
     if rest < 0:
         raise HTTPException(400, "更新后的垫付金额不能小于已还金额")
-    if rest == 0:
-        txn.status = TransactionStatus.settled
-    elif txn.amount_reimbursed == 0:
-        txn.status = TransactionStatus.pending
-    else:
-        txn.status = TransactionStatus.partially_settled
+    txn.status = _calculate_transaction_status(txn.amount_out, txn.amount_reimbursed)
 
     try:
         db.commit()
@@ -316,7 +323,7 @@ def delete_salary_log(salary_log_id: int, db: Session = Depends(get_db)):
         raise HTTPException(500, f"删除回款失败: {e}")
 
 
-# --- Settlement endpoint ---
+# --- Settlement endpoints ---
 
 @app.post("/settle", tags=["3. 核销 (还钱)"])
 def settle_debt(item: schemas.SettleRequest, db: Session = Depends(get_db)):
@@ -346,10 +353,7 @@ def settle_debt(item: schemas.SettleRequest, db: Session = Depends(get_db)):
         salary.amount_unused -= settle_amount
         txn.amount_reimbursed += settle_amount
 
-        if txn.amount_out - txn.amount_reimbursed == 0:
-            txn.status = TransactionStatus.settled
-        else:
-            txn.status = TransactionStatus.partially_settled
+        txn.status = _calculate_transaction_status(txn.amount_out, txn.amount_reimbursed)
 
         settlement_log = TransactionSettlement(
             transaction_id=txn.id,
@@ -430,11 +434,7 @@ def undo_settlement(settlement_id: int, db: Session = Depends(get_db)):
         # Recalculate transaction status
         if txn.amount_reimbursed <= 0:
             txn.amount_reimbursed = Decimal("0")
-            txn.status = TransactionStatus.pending
-        elif txn.amount_reimbursed < txn.amount_out:
-            txn.status = TransactionStatus.partially_settled
-        else:
-            txn.status = TransactionStatus.settled
+        txn.status = _calculate_transaction_status(txn.amount_out, txn.amount_reimbursed)
 
         db.delete(record)
         db.commit()

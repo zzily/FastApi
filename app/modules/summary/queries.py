@@ -5,15 +5,23 @@ from app.domain.enums import Category, IncomeSource
 from app.models import SalaryLog, Transaction
 
 
+def _transaction_month_expr(db: Session):
+    dialect_name = db.bind.dialect.name if db.bind is not None else ""
+    if dialect_name == "sqlite":
+        return func.strftime("%Y-%m", Transaction.created_at)
+    return func.date_format(Transaction.created_at, "%Y-%m")
+
+
 
 def get_monthly_spending_by_category(db: Session):
+    month_expr = _transaction_month_expr(db).label("month")
     return (
         db.query(
-            func.date_format(Transaction.created_at, "%Y-%m").label("month"),
+            month_expr,
             Transaction.category,
             func.sum(Transaction.amount_out).label("total"),
         )
-        .group_by("month", Transaction.category)
+        .group_by(month_expr, Transaction.category)
         .all()
     )
 

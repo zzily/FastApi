@@ -7,10 +7,10 @@ from app.modules.summary import queries
 
 
 
-def build_chart_data(db: Session) -> dict:
-    spending_rows = queries.get_monthly_spending_by_category(db)
-    income_rows = queries.get_monthly_income_by_source(db)
-    category_rows = queries.get_category_totals(db)
+def build_chart_data(db: Session, month: str | None = None) -> dict:
+    spending_rows = queries.get_monthly_spending_by_category(db, month=month)
+    income_rows = queries.get_monthly_income_by_source(db, month=month)
+    category_rows = queries.get_category_totals(db, month=month)
 
     months = defaultdict(
         lambda: {
@@ -51,23 +51,27 @@ def build_chart_data(db: Session) -> dict:
 
 
 
-def get_dashboard(db: Session) -> dict:
-    total_personal_spending = queries.get_total_personal_spending(db)
-    total_out = queries.get_total_out(db)
+def get_dashboard(db: Session, month: str | None = None) -> dict:
+    total_personal_spending = queries.get_total_personal_spending(db, month=month)
+    total_out = queries.get_total_out(db, month=month)
     total_business_lent = float(total_out) - float(total_personal_spending)
 
-    total_reimbursed_from_boss = queries.get_total_income_by_source(db, IncomeSource.reimbursement)
-    total_salary_income = queries.get_total_income_by_source(db, IncomeSource.salary)
+    total_reimbursed_from_boss = queries.get_total_income_by_source(
+        db,
+        IncomeSource.reimbursement,
+        month=month,
+    )
+    total_salary_income = queries.get_total_income_by_source(db, IncomeSource.salary, month=month)
 
     real_business_debt = float(total_business_lent) - float(total_reimbursed_from_boss)
     net_family_savings = float(total_salary_income) - float(total_personal_spending)
 
-    ledger_outstanding = queries.get_ledger_outstanding(db)
-    wallet_unallocated = queries.get_wallet_unallocated(db)
+    ledger_outstanding = queries.get_ledger_outstanding(db, month=month)
+    wallet_unallocated = queries.get_wallet_unallocated(db, month=month)
     total_assets = float(wallet_unallocated) + float(ledger_outstanding)
 
     return {
-        "chart_data": build_chart_data(db),
+        "chart_data": build_chart_data(db, month=month),
         "financial_status": {
             "description": "家庭财务双循环",
             "business_loop": {

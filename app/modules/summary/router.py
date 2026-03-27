@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
@@ -10,5 +10,8 @@ router = APIRouter(tags=["4. 监控大盘"])
 
 
 @router.get("/summary", response_model=ApiResponseSchema[schemas.SummaryResponse])
-def get_dashboard(db: Session = Depends(get_db)):
-    return ok("获取成功", service.get_dashboard(db))
+def get_dashboard(
+    month: str | None = Query(None, pattern=r"^\d{4}-\d{2}$"),
+    db: Session = Depends(get_db),
+):
+    return ok("获取成功", service.get_dashboard(db, month=month))

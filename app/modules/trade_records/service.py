@@ -1,8 +1,9 @@
 from decimal import Decimal
 
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import BusinessRuleError, NotFoundError
+from app.core.exceptions import AppError, NotFoundError
 from app.core.logging import get_logger
 from app.models import TradeRecord
 from app.modules.trade_records import repository
@@ -30,8 +31,21 @@ def _normalize_optional_text(value: str | None) -> str | None:
     return normalized or None
 
 
+def _handle_schema_error(error: Exception) -> None:
+    raw_message = str(getattr(error, "orig", error)).lower()
+    if "trade_records" in raw_message and ("doesn't exist" in raw_message or "no such table" in raw_message):
+        raise AppError(
+            "交易日志数据表尚未初始化，请先执行数据库迁移（alembic upgrade head）。",
+            status_code=503,
+        ) from error
+
+
 def list_trade_records(db: Session, skip: int = 0, limit: int = 100) -> list[TradeRecord]:
-    return repository.list_trade_records(db, skip=skip, limit=limit)
+    try:
+        return repository.list_trade_records(db, skip=skip, limit=limit)
+    except (ProgrammingError, OperationalError) as error:
+        _handle_schema_error(error)
+        raise
 
 
 def create_trade_record(db: Session, item: TradeRecordCreate) -> TradeRecord:
@@ -50,6 +64,10 @@ def create_trade_record(db: Session, item: TradeRecordCreate) -> TradeRecord:
         db.commit()
         db.refresh(trade_record)
         return trade_record
+    except (ProgrammingError, OperationalError) as error:
+        db.rollback()
+        _handle_schema_error(error)
+        raise
     except Exception:
         db.rollback()
         logger.exception("保存交易记录失败")
@@ -57,7 +75,11 @@ def create_trade_record(db: Session, item: TradeRecordCreate) -> TradeRecord:
 
 
 def update_trade_record(db: Session, trade_record_id: int, item: TradeRecordUpdate) -> TradeRecord:
-    trade_record = repository.get_trade_record(db, trade_record_id)
+    try:
+        trade_record = repository.get_trade_record(db, trade_record_id)
+    except (ProgrammingError, OperationalError) as error:
+        _handle_schema_error(error)
+        raise
     if not trade_record:
         raise NotFoundError("交易记录不存在")
 
@@ -82,6 +104,10 @@ def update_trade_record(db: Session, trade_record_id: int, item: TradeRecordUpda
         db.commit()
         db.refresh(trade_record)
         return trade_record
+    except (ProgrammingError, OperationalError) as error:
+        db.rollback()
+        _handle_schema_error(error)
+        raise
     except Exception:
         db.rollback()
         logger.exception("更新交易记录失败")
@@ -89,13 +115,21 @@ def update_trade_record(db: Session, trade_record_id: int, item: TradeRecordUpda
 
 
 def delete_trade_record(db: Session, trade_record_id: int) -> None:
-    trade_record = repository.get_trade_record(db, trade_record_id)
+    try:
+        trade_record = repository.get_trade_record(db, trade_record_id)
+    except (ProgrammingError, OperationalError) as error:
+        _handle_schema_error(error)
+        raise
     if not trade_record:
         raise NotFoundError("交易记录不存在")
 
     try:
         repository.delete_trade_record(db, trade_record)
         db.commit()
+    except (ProgrammingError, OperationalError) as error:
+        db.rollback()
+        _handle_schema_error(error)
+        raise
     except Exception:
         db.rollback()
         logger.exception("删除交易记录失败")

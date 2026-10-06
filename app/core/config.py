@@ -9,6 +9,7 @@ def _split_csv(value: str) -> tuple[str, ...]:
 
 @dataclass(frozen=True)
 class Settings:
+    ledger_restore_token: str = os.getenv("LEDGER_RESTORE_TOKEN", "")
     app_title: str = os.getenv("APP_TITLE", "父亲财务监管系统")
     database_url: str = os.getenv(
         "DATABASE_URL",

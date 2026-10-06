@@ -2,14 +2,14 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.domain.enums import Category, IncomeSource
-from app.models import SalaryLog, Transaction
+from app.models import ExpenseCategory, SalaryLog, Transaction
 
 
 def _transaction_month_expr(db: Session):
     dialect_name = db.bind.dialect.name if db.bind is not None else ""
     if dialect_name == "sqlite":
-        return func.strftime("%Y-%m", Transaction.created_at)
-    return func.date_format(Transaction.created_at, "%Y-%m")
+        return func.strftime("%Y-%m", Transaction.occurred_at)
+    return func.date_format(Transaction.occurred_at, "%Y-%m")
 
 
 def _apply_transaction_month_filter(query, db: Session, month: str | None):
@@ -94,3 +94,14 @@ def get_ledger_outstanding(db: Session, month: str | None = None):
 def get_wallet_unallocated(db: Session, month: str | None = None):
     query = db.query(func.sum(SalaryLog.amount_unused))
     return _apply_salary_month_filter(query, month).scalar() or 0
+
+
+def get_work_outstanding(db: Session, month: str | None = None):
+    query = db.query(func.sum(Transaction.amount_out - Transaction.amount_reimbursed)).filter(Transaction.category == Category.work)
+    return _apply_transaction_month_filter(query, db, month).scalar() or 0
+
+
+def get_personal_category_totals(db: Session, month: str | None = None):
+    name = func.coalesce(ExpenseCategory.name, "未分类").label("name")
+    query = db.query(name, func.sum(Transaction.amount_out).label("total")).outerjoin(ExpenseCategory, Transaction.expense_category_id == ExpenseCategory.id).filter(Transaction.category == Category.personal).group_by(name)
+    return _apply_transaction_month_filter(query, db, month).all()

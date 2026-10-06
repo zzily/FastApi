@@ -1,3 +1,4 @@
+from unittest.mock import patch
 from decimal import Decimal
 import unittest
 
@@ -39,6 +40,11 @@ class DummySession:
 
 
 class TransactionServiceTests(unittest.TestCase):
+    def setUp(self):
+        patcher = patch("app.modules.transactions.service.lock_ledger")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_calculate_transaction_status_boundaries(self):
         self.assertEqual(calculate_transaction_status(Decimal("100"), Decimal("0")), TransactionStatus.pending)
         self.assertEqual(
@@ -64,3 +70,16 @@ class TransactionServiceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class ExpenseCategoryRuleTests(unittest.TestCase):
+    def test_archived_category_is_allowed_only_for_its_existing_bill(self):
+        from app.models import ExpenseCategory
+        from app.core.exceptions import BusinessRuleError
+        from app.modules.transactions.service import validate_expense_category
+        category = ExpenseCategory(id=7, name='餐饮', kind=Category.personal, archived=True)
+        with patch('app.modules.transactions.repository.get_expense_category', return_value=category):
+            with self.assertRaises(BusinessRuleError):
+                validate_expense_category(None, 7, Category.personal)
+            validate_expense_category(None, 7, Category.personal, current_id=7)
+            with self.assertRaises(BusinessRuleError):
+                validate_expense_category(None, 7, Category.work, current_id=7)

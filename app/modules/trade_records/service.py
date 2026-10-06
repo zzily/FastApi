@@ -1,3 +1,4 @@
+from app.modules.ledger.repository import lock_ledger
 from datetime import datetime
 from decimal import Decimal
 from typing import Iterable
@@ -77,6 +78,7 @@ def list_trade_records(db: Session, skip: int = 0, limit: int = 100) -> list[Tra
 
 
 def create_trade_record(db: Session, item: TradeRecordCreate) -> TradeRecord:
+    lock_ledger(db)
     _validate_time_range(item.entry_at, item.exit_at)
 
     trade_record = TradeRecord(
@@ -130,6 +132,7 @@ def create_trade_record(db: Session, item: TradeRecordCreate) -> TradeRecord:
 
 
 def update_trade_record(db: Session, trade_record_id: int, item: TradeRecordUpdate) -> TradeRecord:
+    lock_ledger(db)
     try:
         trade_record = repository.get_trade_record(db, trade_record_id)
     except (ProgrammingError, OperationalError) as error:
@@ -224,6 +227,7 @@ def update_trade_record(db: Session, trade_record_id: int, item: TradeRecordUpda
 
 
 def delete_trade_record(db: Session, trade_record_id: int) -> None:
+    lock_ledger(db)
     try:
         trade_record = repository.get_trade_record(db, trade_record_id)
     except (ProgrammingError, OperationalError) as error:

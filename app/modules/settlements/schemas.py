@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -34,4 +35,4 @@ class SettlementDetailRead(BaseModel):
 class SettleRequest(BaseModel):
     transaction_id: int
     salary_log_id: int
-    amount: float = Field(..., gt=0, description="本次核销多少钱")
+    amount: Decimal = Field(..., gt=0, max_digits=10, decimal_places=2, description="本次核销多少钱")

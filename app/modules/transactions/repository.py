@@ -2,7 +2,7 @@ from sqlalchemy import desc, func
 from sqlalchemy.orm import Session
 
 from app.domain.enums import TransactionStatus
-from app.models import Transaction, TransactionSettlement
+from app.models import ExpenseCategory, Transaction, TransactionSettlement
 
 
 
@@ -33,3 +33,7 @@ def count_linked_settlements(db: Session, transaction_id: int) -> int:
     return db.query(func.count(TransactionSettlement.id)).filter(
         TransactionSettlement.transaction_id == transaction_id
     ).scalar() or 0
+
+
+def get_expense_category(db: Session, category_id: int):
+    return db.get(ExpenseCategory, category_id)

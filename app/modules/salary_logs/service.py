@@ -1,3 +1,4 @@
+from app.modules.ledger.repository import lock_ledger
 from decimal import Decimal
 
 from sqlalchemy.orm import Session
@@ -19,6 +20,7 @@ def list_salary_logs(db: Session, skip: int = 0, limit: int = 100, available_onl
 
 
 def create_salary_log(db: Session, item: SalaryLogCreate) -> SalaryLog:
+    lock_ledger(db)
     amount_decimal = Decimal(str(item.amount))
     actual_date = item.received_date if item.received_date else now_local()
 
@@ -45,6 +47,7 @@ def create_salary_log(db: Session, item: SalaryLogCreate) -> SalaryLog:
 
 
 def update_salary_log(db: Session, salary_log_id: int, item: SalaryLogUpdate) -> SalaryLog:
+    lock_ledger(db)
     salary_log = repository.get_salary_log(db, salary_log_id)
     if not salary_log:
         raise NotFoundError("记录不存在")
@@ -76,6 +79,7 @@ def update_salary_log(db: Session, salary_log_id: int, item: SalaryLogUpdate) ->
 
 
 def delete_salary_log(db: Session, salary_log_id: int) -> None:
+    lock_ledger(db)
     salary_log = repository.get_salary_log(db, salary_log_id)
     if not salary_log:
         raise NotFoundError("记录不存在")

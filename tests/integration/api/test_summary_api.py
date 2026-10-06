@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 
 from app.models import Transaction
 from tests.integration.base import BaseApiTestCase
@@ -58,9 +58,9 @@ class SummaryApiTests(BaseApiTestCase):
         april_work_id = april_work.json()["data"]["id"]
 
         with self.testing_session_local() as db:
-            db.get(Transaction, march_work_id).created_at = datetime(2026, 3, 10, 12, 0, 0)
-            db.get(Transaction, march_personal_id).created_at = datetime(2026, 3, 11, 12, 0, 0)
-            db.get(Transaction, april_work_id).created_at = datetime(2026, 4, 2, 12, 0, 0)
+            db.get(Transaction, march_work_id).occurred_at = date(2026, 3, 10)
+            db.get(Transaction, march_personal_id).occurred_at = date(2026, 3, 11)
+            db.get(Transaction, april_work_id).occurred_at = date(2026, 4, 2)
             db.commit()
 
         self.client.post(
@@ -85,7 +85,7 @@ class SummaryApiTests(BaseApiTestCase):
         self.assertEqual(body["data"]["financial_status"]["business_loop"]["total_reimbursed"], 30.0)
         self.assertEqual(body["data"]["financial_status"]["family_loop"]["gross_income"], 200.0)
         self.assertEqual(body["data"]["financial_status"]["family_loop"]["personal_spending"], 20.0)
-        self.assertEqual(body["data"]["operational_status"]["cash_waiting_allocation"], 230.0)
-        self.assertEqual(body["data"]["operational_status"]["bills_pending_settlement"], 120.0)
+        self.assertEqual(body["data"]["operational_status"]["cash_waiting_allocation"], 730.0)
+        self.assertEqual(body["data"]["operational_status"]["bills_pending_settlement"], 180.0)
         self.assertEqual(len(body["data"]["chart_data"]["monthly_timeline"]), 1)
         self.assertEqual(body["data"]["chart_data"]["monthly_timeline"][0]["month"], "2026-03")

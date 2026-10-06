@@ -1,3 +1,4 @@
+from app.modules.ledger.repository import lock_ledger
 from decimal import Decimal
 
 from sqlalchemy.orm import Session
@@ -5,17 +6,18 @@ from sqlalchemy.orm import Session
 from app.core.exceptions import BusinessRuleError, NotFoundError
 from app.core.logging import get_logger
 from app.core.time import now_local
-from app.domain.enums import IncomeSource
+from app.domain.enums import Category, IncomeSource
 from app.models import TransactionSettlement
 from app.modules.settlements import repository
 from app.modules.settlements.schemas import SettleRequest
-from app.modules.transactions.service import calculate_transaction_status
+from app.modules.transactions.service import build_transaction, calculate_transaction_status
 
 logger = get_logger(__name__)
 
 
 
 def settle_debt(db: Session, item: SettleRequest) -> dict:
+    lock_ledger(db)
     transaction = repository.get_transaction_with_lock(db, item.transaction_id)
     salary_log = repository.get_salary_log_with_lock(db, item.salary_log_id)
 
@@ -24,27 +26,7 @@ def settle_debt(db: Session, item: SettleRequest) -> dict:
     if not salary_log:
         raise NotFoundError("回款记录不存在")
 
-    settle_amount = Decimal(str(item.amount))
-    if salary_log.amount_unused < settle_amount:
-        raise BusinessRuleError(
-            f"资金不足！该笔回款仅剩 {salary_log.amount_unused} 元，无法核销 {settle_amount} 元"
-        )
-
-    remaining_debt = transaction.amount_out - transaction.amount_reimbursed
-    if remaining_debt < settle_amount:
-        raise BusinessRuleError(f"超额核销！该账单仅欠 {remaining_debt} 元")
-
-    settlement_log = TransactionSettlement(
-        transaction_id=transaction.id,
-        salary_log_id=salary_log.id,
-        amount=settle_amount,
-        created_at=now_local(),
-    )
-
-    salary_log.amount_unused -= settle_amount
-    transaction.amount_reimbursed += settle_amount
-    transaction.status = calculate_transaction_status(transaction.amount_out, transaction.amount_reimbursed)
-    repository.add_settlement(db, settlement_log)
+    _apply_settlement(db, transaction, salary_log, Decimal(str(item.amount)))
 
     try:
         db.commit()
@@ -82,6 +64,7 @@ def get_transaction_settlements(db: Session, transaction_id: int) -> list[dict]:
 
 
 def undo_settlement(db: Session, settlement_id: int) -> dict:
+    lock_ledger(db)
     record = repository.get_settlement(db, settlement_id)
     if not record:
         raise NotFoundError("核销记录不存在")
@@ -112,4 +95,48 @@ def undo_settlement(db: Session, settlement_id: int) -> dict:
     except Exception:
         db.rollback()
         logger.exception("撤销核销失败")
+        raise
+
+
+def _apply_settlement(db, transaction, salary_log, settle_amount):
+    settle_amount = settle_amount.quantize(Decimal("0.01"))
+    if salary_log.amount_unused < settle_amount:
+        raise BusinessRuleError(
+            f"资金不足！该笔回款仅剩 {salary_log.amount_unused} 元，无法核销 {settle_amount} 元"
+        )
+
+    remaining_debt = transaction.amount_out - transaction.amount_reimbursed
+    if remaining_debt < settle_amount:
+        raise BusinessRuleError(f"超额核销！该账单仅欠 {remaining_debt} 元")
+
+    settlement_log = TransactionSettlement(
+        transaction=transaction,
+        salary_log=salary_log,
+        amount=settle_amount,
+        created_at=now_local(),
+    )
+
+    salary_log.amount_unused -= settle_amount
+    transaction.amount_reimbursed += settle_amount
+    transaction.status = calculate_transaction_status(transaction.amount_out, transaction.amount_reimbursed)
+    repository.add_settlement(db, settlement_log)
+
+
+
+def create_paid_transaction(db: Session, item):
+    lock_ledger(db)
+    if item.category != Category.personal:
+        raise BusinessRuleError("工作垫付请先记录账单，再关联报销")
+    try:
+        salary_log = repository.get_salary_log_with_lock(db, item.payment_salary_log_id)
+        if not salary_log:
+            raise NotFoundError("到账收入不存在")
+        transaction = build_transaction(db, item)
+        db.add(transaction)
+        _apply_settlement(db, transaction, salary_log, transaction.amount_out)
+        db.commit()
+        db.refresh(transaction)
+        return transaction
+    except Exception:
+        db.rollback()
         raise

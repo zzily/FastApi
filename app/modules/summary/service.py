@@ -1,4 +1,5 @@
 from collections import defaultdict
+from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
@@ -47,6 +48,7 @@ def build_chart_data(db: Session, month: str | None = None) -> dict:
     return {
         "monthly_timeline": timeline,
         "category_breakdown": category_breakdown,
+        "personal_category_breakdown": [{"name": row.name, "value": float(row.total)} for row in queries.get_personal_category_totals(db, month)],
     }
 
 
@@ -54,7 +56,7 @@ def build_chart_data(db: Session, month: str | None = None) -> dict:
 def get_dashboard(db: Session, month: str | None = None) -> dict:
     total_personal_spending = queries.get_total_personal_spending(db, month=month)
     total_out = queries.get_total_out(db, month=month)
-    total_business_lent = float(total_out) - float(total_personal_spending)
+    total_business_lent = Decimal(str(total_out)) - Decimal(str(total_personal_spending))
 
     total_reimbursed_from_boss = queries.get_total_income_by_source(
         db,
@@ -63,11 +65,15 @@ def get_dashboard(db: Session, month: str | None = None) -> dict:
     )
     total_salary_income = queries.get_total_income_by_source(db, IncomeSource.salary, month=month)
 
-    real_business_debt = float(total_business_lent) - float(total_reimbursed_from_boss)
-    net_family_savings = float(total_salary_income) - float(total_personal_spending)
+    # Current receivable is a stock across all months; monthly cohorts report separately.
+    cumulative_work = Decimal(str(queries.get_total_out(db))) - Decimal(str(queries.get_total_personal_spending(db)))
+    cumulative_received = Decimal(str(queries.get_total_income_by_source(db, IncomeSource.reimbursement)))
+    real_business_debt = max(Decimal("0"), cumulative_work - cumulative_received)
+    period_outstanding = queries.get_work_outstanding(db, month=month)
+    net_family_savings = Decimal(str(total_salary_income)) - Decimal(str(total_personal_spending))
 
-    ledger_outstanding = queries.get_ledger_outstanding(db, month=month)
-    wallet_unallocated = queries.get_wallet_unallocated(db, month=month)
+    ledger_outstanding = queries.get_ledger_outstanding(db)
+    wallet_unallocated = queries.get_wallet_unallocated(db)
     total_assets = float(wallet_unallocated) + float(ledger_outstanding)
 
     return {
@@ -77,13 +83,14 @@ def get_dashboard(db: Session, month: str | None = None) -> dict:
             "business_loop": {
                 "total_lent": float(total_business_lent),
                 "total_reimbursed": float(total_reimbursed_from_boss),
-                "current_debt": real_business_debt,
+                "current_debt": float(real_business_debt),
+                "period_outstanding": float(period_outstanding),
                 "status": "等待报销" if real_business_debt > 0 else "已平账",
             },
             "family_loop": {
                 "gross_income": float(total_salary_income),
                 "personal_spending": float(total_personal_spending),
-                "net_savings": net_family_savings,
+                "net_savings": float(net_family_savings),
                 "status": "资产增值中" if net_family_savings > 0 else "入不敷出",
             },
             "total_assets": total_assets,

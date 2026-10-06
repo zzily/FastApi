@@ -76,7 +76,7 @@ class SettlementApiTests(BaseApiTestCase):
         self.assertEqual(settle_response.status_code, 400)
         body = settle_response.json()
         self.assertEqual(body["code"], 400)
-        self.assertEqual(body["message"], "资金不足！该笔回款仅剩 40.00 元，无法核销 60.0 元")
+        self.assertEqual(body["message"], "资金不足！该笔回款仅剩 40.00 元，无法核销 60.00 元")
         self.assertIsNone(body["data"])
 
     def test_settlement_returns_message_when_amount_exceeds_transaction_debt(self):

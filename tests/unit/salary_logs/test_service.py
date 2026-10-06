@@ -1,3 +1,4 @@
+from unittest.mock import patch
 from datetime import datetime
 from decimal import Decimal
 import unittest
@@ -41,6 +42,11 @@ class DummySession:
 
 
 class SalaryLogServiceTests(unittest.TestCase):
+    def setUp(self):
+        patcher = patch("app.modules.salary_logs.service.lock_ledger")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_update_salary_log_keeps_month_when_omitted(self):
         salary_log = DummySalaryLog()
         db = DummySession(salary_log)

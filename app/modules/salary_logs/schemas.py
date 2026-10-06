@@ -20,7 +20,7 @@ class SalaryLogRead(BaseModel):
 
 
 class SalaryLogCreate(BaseModel):
-    amount: float = Field(..., gt=0, description="实际到手金额")
+    amount: Decimal = Field(..., gt=0, max_digits=10, decimal_places=2, description="实际到手金额")
     month: str = Field(..., examples=["2023-10"])
     source: IncomeSource = IncomeSource.salary
     remark: Optional[str] = None
@@ -28,7 +28,7 @@ class SalaryLogCreate(BaseModel):
 
 
 class SalaryLogUpdate(BaseModel):
-    amount: Decimal = Field(..., gt=0, description="修改后的入账金额")
+    amount: Decimal = Field(..., gt=0, max_digits=10, decimal_places=2, description="修改后的入账金额")
     source: IncomeSource
     received_date: Optional[datetime] = None
     remark: Optional[str] = None

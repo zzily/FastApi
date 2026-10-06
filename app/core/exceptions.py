@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 
 from app.core.logging import get_logger
@@ -39,7 +40,7 @@ def add_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(RequestValidationError)
     async def handle_validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
-        return JSONResponse(status_code=422, content=error(422, "请求参数校验失败", exc.errors()))
+        return JSONResponse(status_code=422, content=error(422, "请求参数校验失败", jsonable_encoder(exc.errors())))
 
     @app.exception_handler(Exception)
     async def handle_unexpected_error(_: Request, exc: Exception) -> JSONResponse:

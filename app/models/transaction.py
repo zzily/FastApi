@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from sqlalchemy import Column, DateTime, Enum, Integer, Numeric, String, Text, func
+from sqlalchemy import Boolean, Column, Date, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text, func
 from sqlalchemy.orm import relationship
 
 from app.core.db import Base
@@ -18,6 +18,10 @@ class Transaction(Base):
     status = Column(Enum(TransactionStatus), default=TransactionStatus.pending, index=True)
     receipt_url = Column(String(512), nullable=True)
     remark = Column(Text, nullable=True)
+    expense_category_id = Column(Integer, ForeignKey("expense_categories.id", name="fk_transactions_expense_category"), nullable=True, index=True)
+    expense_category = relationship("ExpenseCategory")
+    occurred_at = Column(Date, nullable=False, index=True)
+    occurred_at_inferred = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, server_default=func.now())
 
     settlements = relationship("TransactionSettlement", back_populates="transaction")
@@ -25,3 +29,7 @@ class Transaction(Base):
     @property
     def amount_due(self):
         return self.amount_out - self.amount_reimbursed
+
+    @property
+    def expense_category_name(self):
+        return self.expense_category.name if self.expense_category else None

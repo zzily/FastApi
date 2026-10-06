@@ -7,7 +7,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.api.deps import get_db
 from app.main import create_app
-from app.models import Base
+from app.models import Base, LedgerGuard
 
 
 class BaseApiTestCase(unittest.TestCase):
@@ -24,6 +24,9 @@ class BaseApiTestCase(unittest.TestCase):
             expire_on_commit=False,
         )
         Base.metadata.create_all(bind=self.engine)
+        with self.testing_session_local() as db:
+            db.add(LedgerGuard(id=1, revision=0))
+            db.commit()
 
         self.app = create_app()
 

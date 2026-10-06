@@ -1,3 +1,4 @@
+from unittest.mock import patch
 from datetime import date, datetime
 from decimal import Decimal
 import unittest
@@ -75,6 +76,11 @@ class DummySession:
 
 
 class TradeRecordServiceTests(unittest.TestCase):
+    def setUp(self):
+        patcher = patch("app.modules.trade_records.service.lock_ledger")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_handle_schema_error_returns_actionable_message_for_missing_table(self):
         error = ProgrammingError(
             "SELECT * FROM trade_records",
